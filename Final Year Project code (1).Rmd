@@ -1,0 +1,630 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+ks2_data <- read.csv("C:/Users/abiae/Downloads/2024-2025_england_ks2revised.csv", stringsAsFactors = FALSE)
+gias_data <- read.csv("C:/Users/abiae/Downloads/results.csv")
+imd_data <- read.csv("C:/Users/abiae/Downloads/deprivation-by-postcode.csv")
+```
+
+```{r}
+ks2_data_rec_1_2 <- ks2_data[!ks2_data$ï..RECTYPE %in% c(3,4, 5), ]
+cat("Number of schools removed due to record type:",nrow(ks2_data)-nrow(ks2_data_rec_1_2),"\n")
+
+suppressed <- ks2_data_rec_1_2$PTMAT_EXP_FSM6CLA1A == "SUPP" | 
+             ks2_data_rec_1_2$PTMAT_EXP_NotFSM6CLA1A == "SUPP"
+
+cat("Number of schools removed due to suppression:",sum(suppressed),"\n")
+
+#Function to clean percentages
+clean_percent <- function(x) {
+  x <- gsub("%", "", x)        #Remove %
+  as.numeric(x)                #Convert to numeric, NAs for empty/non-numeric
+}
+
+ks2_merge_gias <- merge(
+  ks2_data_rec_1_2,
+  gias_data,
+  by = "URN",
+  all.x = TRUE  
+)
+
+#Keep only rows where both FSM and non-FSM have values
+ks2_gias_valid_gap <- suppressWarnings(subset(
+  ks2_merge_gias,
+  !(is.na(clean_percent(PTMAT_EXP_FSM6CLA1A)) &is.na(clean_percent(PTMAT_EXP_NotFSM6CLA1A)))
+))
+cat("Number of schools where percentage of students attaining their expected grade is blank in either column:",nrow(ks2_merge_gias)-nrow(ks2_gias_valid_gap)-sum(suppressed),"\n")
+
+names(imd_data)[names(imd_data) == "ï..Postcode"] <- "Postcode"
+
+analysis_data <- merge(
+  ks2_gias_valid_gap,
+  imd_data,
+  by.x = "Postcode",
+  by.y = "Postcode",
+  all.x = TRUE
+)
+```
+```{r}
+not_fsm <- na.omit(suppressWarnings(clean_percent(ks2_data_rec_1_2$PTMAT_EXP_NotFSM6CLA1A)))
+fsm <- na.omit(suppressWarnings(clean_percent(ks2_data_rec_1_2$PTMAT_EXP_FSM6CLA1A)))
+
+summary(not_fsm)
+summary(fsm)
+boxplot(not_fsm,fsm, 
+        names = c("Not FSM", "FSM"),
+        horizontal = TRUE, 
+        main = "Attainment Comparison",
+        xlab = "Percentage of Students Achieving the Expected Standard")
+
+t.test(not_fsm,fsm,alternative = "greater")
+
+
+
+
+```
+
+Type of Establishment
+```{r}
+plot_data <- data.frame(
+  school_type = factor(analysis_data$TypeOfEstablishment..name., levels = school_types),
+  FSM = clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  NotFSM = clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A)
+)
+
+#Convert school types to numeric positions
+plot_data$school_num <- as.numeric(plot_data$school_type)
+
+n_types <- length(school_types)
+
+par(mar = c(5, 4, 4, 2))
+
+boxplot(
+  FSM ~ school_num,
+  data = plot_data,
+  col = "red",
+  ylim = c(0, 100),
+  at = (1:n_types) - 0.2,
+  boxwex = 0.3,
+  xaxt = "n",
+  main = "KS2 Maths Attainment by School Type",
+  xlab = "School Type (see key below)",
+  ylab = "Percentage Achieving Expected Standard"
+)
+
+boxplot(
+  NotFSM ~ school_num,
+  data = plot_data,
+  col = "blue",
+  add = TRUE,
+  at = (1:n_types) + 0.2,
+  boxwex = 0.3,
+  xaxt = "n"
+)
+
+axis(
+  1,
+  at = 1:n_types,
+  labels = 1:n_types
+)
+
+legend("topleft", legend = c("FSM", "Not FSM"), fill = c("red", "blue"))
+
+school_type_key <- data.frame( 
+  Number = 1:length(school_types), 
+  SchoolType = as.character(school_types) 
+  ) 
+
+cat("School Type Key:\n") 
+for(i in 1:nrow(school_type_key)){
+  cat(i, "=", school_type_key$SchoolType[i], "\n") 
+}
+
+fsm_means_type <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  analysis_data$TypeOfEstablishment..name.,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+notfsm_means_type <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A),
+  analysis_data$TypeOfEstablishment..name.,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+fsm_means_type <- fsm_means_type[school_types]
+notfsm_means_type <- notfsm_means_type[school_types]
+
+gap_ratio_type <- fsm_means_type / notfsm_means_type
+
+fsm_means_type
+notfsm_means_type
+gap_ratio_type
+
+```
+School Size: TOTPUPS
+```{r}
+analysis_data$size_group <- cut(
+  as.numeric(analysis_data$TOTPUPS),
+  breaks = c(0, 210, 420, 630, Inf),
+  include.lowest = TRUE
+)
+
+plot_data <- data.frame(
+  size_group = analysis_data$size_group,
+  FSM = clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  NotFSM = clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A)
+)
+
+boxplot(
+  FSM ~ size_group,
+  data = plot_data,
+  col = "red",
+  ylim = c(0, 100),
+  main = "KS2 Maths Attainment by School Size",
+  xlab = "School Size (Forms of Entry)",
+  ylab = "Percentage Achieving Expected Standard",
+  at = c(1,2,3,4) - 0.2,
+  boxwex = 0.3,
+  xaxt = "n"
+)
+
+boxplot(
+  NotFSM ~ size_group,
+  data = plot_data,
+  col = "blue",
+  add = TRUE,
+  at = c(1,2,3,4) + 0.2,
+  boxwex = 0.3,
+  xaxt = "n"
+)
+
+axis(
+  1,
+  at = 1:4,
+  labels = c("1FE", "2FE", "3FE", "4FE+")
+)
+
+legend("topleft", legend = c("FSM", "Not FSM"), fill = c("red", "blue"))
+
+# Calculate means
+fsm_means <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  analysis_data$size_group,
+  mean,
+  na.rm = TRUE
+)
+
+notfsm_means <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A),
+  analysis_data$size_group,
+  mean,
+  na.rm = TRUE
+)
+
+fsm_means
+notfsm_means
+fsm_means/notfsm_means
+
+ratio <- clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A) /
+         clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A)
+valid <- is.finite(ratio)
+
+ratio_clean <- ratio[valid]
+size_clean <- as.numeric(analysis_data$TOTPUPS)[valid]
+
+
+cat("Correlation of school size and the gap",cor(size_clean, ratio_clean),"\n")
+cat("Correlation of school size and percentage of fsm students achieving expected",cor(as.numeric(analysis_data$TOTPUPS), clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A)),"\n")
+cat("Correlation of school size and percentage of non-fsm students achieving expected",cor(as.numeric(analysis_data$TOTPUPS), clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A)),"\n")
+```
+
+Percentage FSM
+```{r}
+# Create FSM percentage bins
+analysis_data$fsm_bin <- cut(
+  analysis_data$PercentageFSM,
+  breaks = seq(0, 100, by = 10),
+  include.lowest = TRUE,
+  labels = c("0-10", "10-20", "20-30", "30-40", "40-50",
+             "50-60", "60-70", "70-80", "80-90", "90-100")
+)
+
+# Calculate mean attainment per bin for FSM and Not FSM
+bin_fsm <- tapply(
+  clean_percent(analysis_data$PTGPS_EXP_FSM6CLA1A),
+  analysis_data$fsm_bin,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+bin_notfsm <- tapply(
+  clean_percent(analysis_data$PTGPS_EXP_NotFSM6CLA1A),
+  analysis_data$fsm_bin,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+# Plot
+x_vals <- 1:length(bin_fsm)
+
+par(mar = c(5, 4, 4, 2))
+plot(
+  x_vals, bin_fsm,
+  type = "b",
+  pch = 19,
+  col = "red",
+  ylim = c(0, 100),
+  xaxt = "n",
+  xlab = "Percentage of FSM Pupils in School",
+  ylab = "Mean Percentage Achieving Expected Standard",
+  main = "KS2 Maths Attainment by School FSM Concentration"
+)
+lines(x_vals, bin_notfsm, type = "b", pch = 19, col = "blue")
+axis(1, at = x_vals, labels = names(bin_fsm), las = 2)
+legend("topright", legend = c("FSM", "Not FSM"), col = c("red", "blue"), 
+       pch = 19, lty = 1)
+
+# Calculate gap for each bin
+gap_pp <- bin_notfsm - bin_fsm
+ratio <- bin_fsm / bin_notfsm
+
+# Create table
+gap_table <- data.frame(
+  FSM_Band = names(bin_fsm),
+  FSM_Attainment = round(bin_fsm, 1),
+  NotFSM_Attainment = round(bin_notfsm, 1),
+  Gap_PP = round(gap_pp, 1),
+  Ratio = round(ratio, 3)
+)
+
+print(gap_table)
+```
+
+Region
+```{r}
+fsm_means_region <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  analysis_data$GOR..name.,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+regions <- names(sort(fsm_means_region))
+
+plot_data <- data.frame(
+  region = factor(analysis_data$GOR..name., levels = regions),
+  FSM = clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  NotFSM = clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A)
+)
+
+plot_data$region_num <- as.numeric(plot_data$region)
+n_regions <- length(regions)
+
+par(mar = c(5, 4, 4, 2))  
+
+boxplot(
+  FSM ~ region_num,
+  data = plot_data,
+  col = "red",
+  ylim = c(0, 100),
+  at = (1:n_regions) - 0.2,
+  boxwex = 0.3,
+  xaxt = "n",
+  main = "KS2 Maths Attainment by Region",
+  xlab = "Region (see key below)",
+  ylab = "Percentage Achieving Expected Standard"
+)
+
+boxplot(
+  NotFSM ~ region_num,
+  data = plot_data,
+  col = "blue",
+  add = TRUE,
+  at = (1:n_regions) + 0.2,
+  boxwex = 0.3,
+  xaxt = "n"
+)
+
+axis(
+  1,
+  at = 1:n_regions,
+  labels = 1:n_regions
+)
+
+legend("topleft", inset = c(0, -0.25),legend = c("FSM", "Not FSM"), fill = c("red", "blue"),
+  xpd = TRUE)
+
+region_key <- data.frame(
+  Number = 1:n_regions,
+  Region = regions
+)
+
+cat("Region Key:\n")
+for(i in 1:nrow(region_key)){
+  cat(region_key$Number[i], "=", region_key$Region[i], "\n")
+}
+fsm_means_region <- fsm_means_region[regions]
+
+notfsm_means_region <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A),
+  analysis_data$GOR..name.,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+notfsm_means_region <- notfsm_means_region[regions]
+
+gap_ratio_region <- fsm_means_region / notfsm_means_region
+
+fsm_means_region
+notfsm_means_region
+gap_ratio_region
+```
+
+IMD rank
+```{r}
+fsm_cor <- cor(analysis_data$Index.of.Multiple.Deprivation.Decile,
+               clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+               use = "complete.obs")
+
+notfsm_cor <- cor(analysis_data$Index.of.Multiple.Deprivation.Decile,
+                  clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A),
+                  use = "complete.obs")
+fsm_cor
+notfsm_cor
+
+# Compute the ratio per decile
+gap_by_decile <- aggregate(
+  cbind(FSM = clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+        NotFSM = clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A)) ~ 
+    Index.of.Multiple.Deprivation.Decile,
+  data = analysis_data,
+  FUN = mean,
+  na.rm = TRUE
+)
+
+# Add a new column for the gap (FSM / NotFSM)
+gap_by_decile$Gap <- gap_by_decile$FSM / gap_by_decile$NotFSM
+
+# View the result
+gap_by_decile
+
+# Create IMD rank bins (e.g., deciles)
+analysis_data$imd_bin <- cut(
+  analysis_data$Index.of.Multiple.Deprivation.Rank,
+  breaks = quantile(analysis_data$Index.of.Multiple.Deprivation.Rank, probs = seq(0, 1, 0.1), na.rm = TRUE),
+  include.lowest = TRUE,
+  labels = paste0(1:10)
+)
+
+# Calculate mean attainment per bin for FSM and Not FSM
+bin_fsm <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_FSM6CLA1A),
+  analysis_data$imd_bin,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+bin_notfsm <- tapply(
+  clean_percent(analysis_data$PTMAT_EXP_NotFSM6CLA1A),
+  analysis_data$imd_bin,
+  function(x) mean(x, na.rm = TRUE)
+)
+
+# Plot
+x_vals <- 1:length(bin_fsm)
+
+par(mar = c(5, 4, 4, 2))
+plot(
+  x_vals, bin_fsm,
+  type = "b",
+  pch = 19,
+  col = "red",
+  ylim = c(0, 100),
+  xaxt = "n",
+  xlab = "IMD Rank Decile (1 = most deprived)",
+  ylab = "Mean Percentage Achieving Expected Standard",
+  main = "KS2 Maths Attainment by IMD Decile"
+)
+lines(x_vals, bin_notfsm, type = "b", pch = 19, col = "blue")
+axis(1, at = x_vals, labels = names(bin_fsm), las = 2)
+legend("bottomright", legend = c("FSM", "Not FSM"), col = c("red", "blue"), 
+       pch = 19, lty = 1)
+
+gap_bin <- bin_fsm / bin_notfsm
+
+# Correlation between IMD bin (1–10) and gap
+gap_cor <- cor(1:length(gap_bin), gap_bin, use = "complete.obs")
+
+gap_cor
+```
+Real will get used thing
+```{r}
+#Remove special schools
+analysis_data <- analysis_data[
+  !grepl("special", analysis_data$TypeOfEstablishment..name., ignore.case = TRUE), 
+]
+
+df <- analysis_data
+response_vars <- c("PTMAT_EXP_FSM6CLA1A", "PTMAT_EXP_NotFSM6CLA1A")
+
+#These are things which should've been filtered out but haven't causing issues,
+#such as multicollinearity, or they are just too many blanks/not applicable
+drop_manually  <- c("READPROG_23", "TEALGRP2", "READPROG_LOWER_23",
+                    "IDAOPI.Rank", "IDAOPI.Score","TEALGRP3","TFSMCLA1A","TFSM6CLA1A",
+                    "READPROG_UPPER_23", "ReligiousEthos..name.","size_group",
+                    "fsm_bin", "Country..name.","TNOTFSM6CLA1A","TNOTFSMCLA1A",
+                    "ReasonEstablishmentClosed..name.","AdmissionsPolicy..name.",
+                    "FurtherEducationType..name.","EdByOther..name.")
+#These are ID like columns, so won't have an effect on the gap
+admin_cols     <- c("URN","ALPHAIND","LEA","ESTAB","TELNUM","URN_AC",
+                    "NFTYPE","ICLOSE","TAB15","TAB1618","RECTYPE",
+                    "LA..code.","EstablishmentNumber","UKPRN","UPRN",
+                    "TelephoneNum","Easting","Northing","Postcode.Status",
+                    "CloseDate","DIFFN_RWM_EXP","DIFFN_RWM_HIGH",
+                    "HeadTitle..name.")
+
+clean_data <- function(df, keep_cols) {
+
+  #Clean percent strings
+  for (col in names(df)) {
+    if (is.character(df[[col]])) {
+      num <- suppressWarnings(as.numeric(trimws(gsub("%", "", df[[col]]))))
+      df[[col]] <- if (mean(!is.na(num)) > 0.5) num else as.factor(df[[col]])
+    }
+  }
+
+  drop <- function(cols, reason) {
+    cols <- setdiff(cols, keep_cols)
+    cols <- intersect(cols, names(df))
+    cat(reason, length(cols), "\n")
+    df <<- df[, !names(df) %in% cols]
+  }
+  #This is trying to remove the other results, so I dont care at the moment if
+  #writing scores are correlated with maths scores
+  drop(names(df)[grepl("^PT|AVERAGE", names(df))],          "PT/AVERAGE cols dropped:")
+  drop(c(admin_cols, names(df)[grepl("^ï\\.\\.", names(df))]), "Admin cols dropped:")
+  drop(names(df)[sapply(df, \(x) all(is.na(x) | x == ""))],        "Empty cols dropped:")
+  drop(names(df)[sapply(df, \(x) (is.factor(x) && nlevels(x) > 50) ||
+         (is.character(x) && length(unique(na.omit(x))) > 50))],    "High-cardinality cols dropped:")
+  drop(names(df)[sapply(df, \(x) is.factor(x) &&
+         length(unique(na.omit(as.character(x))[nzchar(unique(na.omit(as.character(x))))])) < 2)],
+       "Single-level cols dropped:")
+  drop(names(df)[sapply(df, \(x) mean(is.na(x))) > 0.1],            "Sparse (>10% NA) cols dropped:")
+
+  #Recheck single level factors on complete cases
+  df_cc <- df[complete.cases(df), ]
+  drop(names(df_cc)[sapply(df_cc, \(x) is.factor(x) &&
+         length(unique(na.omit(as.character(x))[nzchar(unique(na.omit(as.character(x))))])) < 2)],
+       "Single-level (complete cases) cols dropped:")
+
+  drop(drop_manually, "Manual cols dropped:")
+
+  cat("Remaining columns:", ncol(df), "| Complete cases:", sum(complete.cases(df)), "\n")
+  df
+}
+
+df_clean <- clean_data(analysis_data, keep_cols = response_vars)
+
+#Use FSM response to select predictors (both models share the same base)
+my_model <- lm(as.formula(paste(response_vars[1], "~ .")),
+                  data = df_clean[, !names(df_clean) %in% response_vars[-1]],
+                  na.action = na.omit)
+
+pvals <- summary(my_model)$coefficients[, 4]
+sig_predictors <- unique(Filter(\(col)
+  any(pvals[grep(paste0("^", col), names(pvals))] < 0.2, na.rm = TRUE),
+  setdiff(names(df_clean), response_vars)
+))
+
+df_model <- df_clean[, c(sig_predictors, response_vars)]
+cat("Predictors after p-value filter:", length(sig_predictors), "\n")
+
+fit_and_step <- function(response) {
+  cols <- c(sig_predictors, response)
+  base <- lm(as.formula(paste(response, "~ .")),
+             data = df_model[, cols], na.action = na.omit)
+  step(base, direction = "both")
+}
+
+model_fsm    <- fit_and_step("PTMAT_EXP_FSM6CLA1A")
+model_notfsm <- fit_and_step("PTMAT_EXP_NotFSM6CLA1A")
+
+summary(model_fsm)
+summary(model_notfsm)
+```
+Now for each model I will decide the reference levels
+```{r}
+table(df_model$RELDENOM) #Does not apply is neutral and has the most schools
+df_model$RELDENOM <- relevel(df_model$RELDENOM, ref = "Does not apply")
+
+table(df_model$AGERANGE) #3-11 is the most common
+df_model$AGERANGE <- relevel(df_model$AGERANGE, ref = "3-11")
+
+#TOTPUPS will have no reference level
+#TPUPYEAR will have no reference level
+#TELIG will have no reference level
+#TMOBN will have no reference level
+#PSENELE will have no reference level
+#TELIG_24 will have no reference level
+#TEALGRP1 will have no reference level
+#StatutoryLowAge will have no reference level
+#SchoolCapactiy will have no reference level
+#PercentageFSM will have no reference level
+#Index.of.Multiple.Deprivation.Rank will have no reference level
+#Education.and.Skills.Rank will have no reference level
+#Crime.Rank will have no reference level
+#IDAOPI.Decile will have no reference level
+#Income.Rank will have no reference level
+
+table(df_model$TypeOfEstablishment..name.) #Academy Converter is the most common
+df_model$TypeOfEstablishment..name. <- relevel(df_model$TypeOfEstablishment..name., ref = "Academy converter")
+
+table(df_model$EstablishmentStatus..name.) #Open is the most common
+df_model$EstablishmentStatus..name. <- relevel(df_model$EstablishmentStatus..name., ref = "Open")
+
+table(df_model$NurseryProvision..name.) #Has nursey if most common is the most common
+df_model$NurseryProvision..name. <- relevel(df_model$NurseryProvision..name., ref = "Has Nursery Classes")
+
+table(df_model$Gender..name.) #Mixed is the most common
+df_model$Gender..name. <- relevel(df_model$Gender..name., ref = "Mixed")
+
+table(df_model$SpecialClasses..name.) #SpecialClasses..name. is the most common
+df_model$SpecialClasses..name. <- relevel(df_model$SpecialClasses..name., ref = "No Special Classes")
+
+table(df_model$FederationFlag..name.) #Not applicable is the most common but not under federation is close
+df_model$FederationFlag..name. <- relevel(df_model$FederationFlag..name., ref = "Not applicable")
+
+table(df_model$SEN2..name.) #blank is the most common but not under federation is close
+df_model$SEN2..name. <- relevel(df_model$SEN2..name., ref = "")
+
+table(df_model$SEN8..name.) #blank is the most common but not under federation is close
+df_model$SEN8..name. <- relevel(df_model$SEN8..name., ref = "")
+
+table(df_model$SEN9..name.) #blank is the most common but not under federation is close
+df_model$SEN9..name. <- relevel(df_model$SEN9..name., ref = "")
+
+table(df_model$GOR..name.) #Yorkshire and the Humber  is the median location
+df_model$GOR..name. <- relevel(df_model$GOR..name. , ref = "Yorkshire and the Humber")
+```
+Get models with correct ref levels
+```{r}
+model_fsm_ref_level    <- lm(formula(model_fsm),    data = df_model, na.action = na.omit)
+model_notfsm_ref_level <- lm(formula(model_notfsm), data = df_model, na.action = na.omit)
+summary(model_fsm_ref_level)
+summary(model_notfsm_ref_level)
+```
+Real coefficent comparision
+```{r}
+get_sig <- function(model) {
+  coefs <- summary(model)$coefficients
+  coefs <- coefs[coefs[, "Pr(>|t|)"] < 0.05 & rownames(coefs) != "(Intercept)", ]
+  coefs[order(abs(coefs[, "Estimate"]), decreasing = TRUE), ]
+}
+
+sig_notfsm <- get_sig(model_notfsm_ref_level)
+sig_fsm    <- get_sig(model_fsm_ref_level)
+
+both        <- intersect(rownames(sig_notfsm), rownames(sig_fsm))
+only_notfsm <- setdiff(rownames(sig_notfsm), rownames(sig_fsm))
+only_fsm    <- setdiff(rownames(sig_fsm), rownames(sig_notfsm))
+
+cat("Both:\n");     print(both)
+cat("Only NotFSM:\n"); print(only_notfsm)
+cat("Only FSM:\n");    print(only_fsm)
+
+data.frame(
+  variable    = both,
+  coef_notfsm = sig_notfsm[both, "Estimate"],
+  coef_fsm    = sig_fsm[both, "Estimate"]
+)
+```
+
+```{r}
+#Linearity & Homoscedasticity from residuals vs fitted plot
+plot(model_fsm_ref_level, which = 1)
+plot(model_notfsm_ref_level, which = 1)
+
+#Normality - QQPlot
+plot(model_fsm, which = 2)
+plot(model_notfsm_ref_level, which = 2)
+```
